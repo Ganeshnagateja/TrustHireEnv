@@ -1,3 +1,16 @@
+---
+license: mit
+title: TrustHireEnv
+sdk: docker
+emoji: 💻
+colorFrom: blue
+colorTo: indigo
+pinned: false
+tags:
+  - openenv
+  - benchmark
+  - multimodal
+---
 # TrustHireEnv
 
 **OpenEnv-Compliant Benchmark Environment for Multimodal Interview Integrity & Hiring Workflow Evaluation**
