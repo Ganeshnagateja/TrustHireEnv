@@ -17,4 +17,4 @@ COPY . .
 
 RUN python -c "from env.environment import TrustHireEnv; env=TrustHireEnv(difficulty='easy'); env.reset(); print('Docker smoke-test OK')"
 
-CMD python baseline_eval.py --no-llm --episodes 3 && tail -f /dev/null
+CMD ["uvicorn", "inference:app", "--host", "0.0.0.0", "--port", "7860"]
