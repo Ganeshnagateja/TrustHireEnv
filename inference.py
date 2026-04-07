@@ -1,31 +1,53 @@
+from fastapi import FastAPI
+from pydantic import BaseModel
+from typing import Any, Dict
+import os
+
 from env.environment import TrustHireEnv
 
-# persistent environment instance for checker calls
-_env = None
+# Required env vars pattern for checker
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:7860")
+MODEL_NAME = os.getenv("MODEL_NAME", "TrustHireEnv")
+HF_TOKEN = os.getenv("HF_TOKEN")  # optional
+
+app = FastAPI(title="TrustHireEnv OpenEnv API")
+
+env = TrustHireEnv(difficulty="easy", seed=42)
 
 
-def reset(task: str = "easy", seed: int = 42):
-    """
-    Reset environment for a given task.
-    Called by Meta OpenEnv automated checker.
-    """
-    global _env
-    _env = TrustHireEnv(difficulty=task, seed=seed)
-    return _env.reset()
+class StepRequest(BaseModel):
+    flag_level: str
+    next_step: str
+    rationale: str | None = ""
 
 
-def step(action: dict):
-    """
-    Execute one environment step.
-    Called by Meta OpenEnv automated checker.
-    """
-    global _env
+@app.get("/")
+def health():
+    return {"status": "ok", "model": MODEL_NAME}
 
-    if _env is None:
-        raise RuntimeError("Environment not initialized. Call reset() first.")
 
-    obs, reward, done, info = _env.step(action)
+@app.post("/reset")
+def reset(payload: Dict[str, Any] | None = None):
+    global env
+    difficulty = "easy"
+    seed = 42
 
+    if payload:
+        difficulty = payload.get("difficulty", "easy")
+        seed = payload.get("seed", 42)
+
+    env = TrustHireEnv(difficulty=difficulty, seed=seed)
+    obs = env.reset()
+    return {"observation": obs}
+
+
+@app.post("/step")
+def step(req: StepRequest):
+    obs, reward, done, info = env.step({
+        "flag_level": req.flag_level,
+        "next_step": req.next_step,
+        "rationale": req.rationale,
+    })
     return {
         "observation": obs,
         "reward": reward,
@@ -34,18 +56,6 @@ def step(action: dict):
     }
 
 
-def run():
-    """
-    Optional local smoke-test.
-    """
-    obs = reset("easy")
-    result = step({
-        "flag_level": "none",
-        "next_step": "continue",
-        "rationale": "smoke test"
-    })
-    return result
-
-
-if __name__ == "__main__":
-    print(run())
+@app.get("/health")
+def health_check():
+    return {"healthy": True}
