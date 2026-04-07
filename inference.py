@@ -1,17 +1,51 @@
-import os
-import json
-from baseline_eval import main as baseline_main
+from env.environment import TrustHireEnv
 
-API_BASE_URL = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
-MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
-HF_TOKEN = os.getenv("HF_TOKEN")
+# persistent environment instance for checker calls
+_env = None
+
+
+def reset(task: str = "easy", seed: int = 42):
+    """
+    Reset environment for a given task.
+    Called by Meta OpenEnv automated checker.
+    """
+    global _env
+    _env = TrustHireEnv(difficulty=task, seed=seed)
+    return _env.reset()
+
+
+def step(action: dict):
+    """
+    Execute one environment step.
+    Called by Meta OpenEnv automated checker.
+    """
+    global _env
+
+    if _env is None:
+        raise RuntimeError("Environment not initialized. Call reset() first.")
+
+    obs, reward, done, info = _env.step(action)
+
+    return {
+        "observation": obs,
+        "reward": reward,
+        "done": done,
+        "info": info,
+    }
+
 
 def run():
     """
-    Meta Hackathon automated inference entrypoint.
-    Uses deterministic no-LLM baseline for reproducibility.
+    Optional local smoke-test.
     """
-    os.system("python baseline_eval.py --no-llm")
+    obs = reset("easy")
+    result = step({
+        "flag_level": "none",
+        "next_step": "continue",
+        "rationale": "smoke test"
+    })
+    return result
+
 
 if __name__ == "__main__":
-    run()
+    print(run())
