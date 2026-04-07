@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "TrustHireEnv"
+version = "1.0.1"
+description = "OpenEnv benchmark for multimodal interview integrity and hiring workflow evaluation"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Ganesh Naga Teja" }
+]
+
+dependencies = [
+    "pydantic>=2.0,<3.0",
+    "openai>=1.0,<2.0",
+    "pyyaml>=6.0",
+    "rich>=13.0",
+    "fastapi",
+    "uvicorn"
+]
+
+[tool.setuptools]
+packages = ["env"]
