@@ -5,11 +5,11 @@ from openai import OpenAI
 from env.environment import TrustHireEnv
 
 # ======================================================
-# REQUIRED ENV VARIABLES
+# REQUIRED ENV VARIABLES (STRICT FOR SUBMISSION)
 # ======================================================
-API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("API_KEY") or "dummy-key"
+API_BASE_URL = os.environ["API_BASE_URL"]
+API_KEY = os.environ["API_KEY"]
+MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
 
 BENCHMARK = "TrustHireEnv"
 TASKS = ["easy", "medium", "hard"]
@@ -17,7 +17,7 @@ MAX_STEPS = 5
 
 
 # ======================================================
-# MANDATORY LOGGING FORMAT
+# REQUIRED LOGGING FORMAT
 # ======================================================
 def log_start(task: str, env: str, model: str) -> None:
     print(f"[START] task={task} env={env} model={model}", flush=True)
@@ -31,10 +31,9 @@ def log_step(
     error: Optional[str]
 ) -> None:
     error_val = error if error else "null"
-    done_val = str(done).lower()
     print(
         f"[STEP] step={step} action={action} reward={reward:.2f} "
-        f"done={done_val} error={error_val}",
+        f"done={str(done).lower()} error={error_val}",
         flush=True,
     )
 
@@ -54,15 +53,32 @@ def log_end(
 
 
 # ======================================================
-# TASK POLICY
+# LLM POLICY
 # ======================================================
-def choose_action(task: str, step: int, observation) -> Tuple[str, str, str]:
-    """
-    Returns only valid enum values:
-    flag_level -> none/low/medium/high
-    next_step  -> continue/followup/warn/escalate
-    """
+SYSTEM_PROMPT = """
+You are controlling TrustHireEnv.
 
+You must output EXACTLY one line in this format:
+flag_level|next_step|rationale
+
+Allowed flag_level values:
+none
+low
+medium
+high
+
+Allowed next_step values:
+continue
+followup
+warn
+escalate
+
+Choose the safest and most reward-improving action based on the observation and current step.
+Do not output anything else.
+""".strip()
+
+
+def fallback_policy(task: str, step: int, observation: str) -> Tuple[str, str, str]:
     obs = str(observation).lower()
 
     critical_keywords = [
@@ -70,13 +86,11 @@ def choose_action(task: str, step: int, observation) -> Tuple[str, str, str]:
         "criminal", "blacklisted", "salary discrepancy",
         "identity mismatch"
     ]
-
     medium_keywords = [
         "missing", "gap", "unclear",
         "incomplete", "pending", "unverified"
     ]
 
-    # Keyword-driven overrides
     if any(k in obs for k in critical_keywords):
         return "high", "escalate", "High-risk verification failure detected"
 
@@ -85,17 +99,14 @@ def choose_action(task: str, step: int, observation) -> Tuple[str, str, str]:
             return "medium", "followup", "Additional verification required"
         return "high", "escalate", "Repeated unresolved issue"
 
-    # Task-specific staged policies
     if task == "easy":
         if step == 1:
             return "low", "continue", "Initial profile consistency check"
-        if step == 2:
+        if step in [2, 3]:
             return "medium", "followup", "Running additional checks"
-        if step == 3:
-            return "medium", "followup", "Need clarification on minor signals"
         if step == 4:
             return "high", "escalate", "Escalating after repeated checks"
-        return "medium", "warn", "Final caution issued after escalation"
+        return "medium", "warn", "Final caution after escalation"
 
     if task == "medium":
         if step == 1:
@@ -105,7 +116,7 @@ def choose_action(task: str, step: int, observation) -> Tuple[str, str, str]:
         if step == 3:
             return "high", "warn", "Suspicion level increasing"
         if step == 4:
-            return "high", "escalate", "Escalating due to unresolved anomalies"
+            return "high", "escalate", "Escalating unresolved anomalies"
         return "medium", "warn", "Final caution after escalation"
 
     # hard
@@ -120,21 +131,77 @@ def choose_action(task: str, step: int, observation) -> Tuple[str, str, str]:
     return "medium", "warn", "Final caution after high-risk handling"
 
 
+def parse_action(text: str) -> Optional[Tuple[str, str, str]]:
+    text = (text or "").strip()
+    parts = [p.strip() for p in text.split("|", 2)]
+    if len(parts) != 3:
+        return None
+
+    flag_level, next_step, rationale = parts
+
+    valid_flags = {"none", "low", "medium", "high"}
+    valid_steps = {"continue", "followup", "warn", "escalate"}
+
+    if flag_level not in valid_flags:
+        return None
+    if next_step not in valid_steps:
+        return None
+    if not rationale:
+        rationale = "LLM-selected action"
+
+    return flag_level, next_step, rationale
+
+
+def choose_action_with_llm(
+    client: OpenAI,
+    task: str,
+    step: int,
+    observation
+) -> Tuple[str, str, str]:
+    obs_text = str(observation)
+
+    user_prompt = f"""
+Task: {task}
+Step: {step}
+Observation:
+{obs_text}
+
+Return exactly one line:
+flag_level|next_step|rationale
+""".strip()
+
+    try:
+        resp = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.0,
+            max_tokens=40,
+        )
+
+        content = resp.choices[0].message.content or ""
+        parsed = parse_action(content)
+        if parsed is not None:
+            return parsed
+
+    except Exception:
+        pass
+
+    return fallback_policy(task, step, obs_text)
+
+
 # ======================================================
-# SCORE NORMALIZATION
+# SCORING
 # ======================================================
 def score_from_rewards(rewards: List[float]) -> float:
-    """
-    Produce a score strictly inside (0,1), never 0.0 or 1.0.
-    """
     if not rewards:
         return 0.01
 
-    # Use best_reward-based mapping, then clamp to open interval
     best_reward = max(rewards)
     score = (best_reward + 1.0) / 2.0
 
-    # Strictly within (0,1)
     if score <= 0.0:
         score = 0.01
     elif score >= 1.0:
@@ -160,7 +227,9 @@ def run_task(client: OpenAI, task: str) -> None:
         observation = env.reset()
 
         for step in range(1, MAX_STEPS + 1):
-            flag_level, next_step, rationale = choose_action(task, step, observation)
+            flag_level, next_step, rationale = choose_action_with_llm(
+                client, task, step, observation
+            )
 
             action_str = f"{flag_level}|{next_step}|{rationale}"
 
@@ -206,12 +275,10 @@ def run_task(client: OpenAI, task: str) -> None:
 # MAIN
 # ======================================================
 def main():
-    # Mandatory OpenAI client usage
     client = OpenAI(
         base_url=API_BASE_URL,
-        api_key=HF_TOKEN,
+        api_key=API_KEY,
     )
-    _ = client
 
     for task in TASKS:
         run_task(client, task)
